@@ -1199,21 +1199,60 @@ RCTAutoInsetsProtocol>
 /**
  * alert
  */
-- (void)webView:(WKWebView *)webView runJavaScriptAlertPanelWithMessage:(NSString *)message initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(void))completionHandler
+- (void)webView:(WKWebView *)webView
+runJavaScriptAlertPanelWithMessage:(NSString *)message
+initiatedByFrame:(WKFrameInfo *)frame
+completionHandler:(void (^)(void))completionHandler
 {
 #if !TARGET_OS_OSX
-  UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"" message:message preferredStyle:UIAlertControllerStyleAlert];
-  [alert addAction:[UIAlertAction actionWithTitle:@"Ok" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
-    completionHandler();
-  }]];
-  [[self topViewController] presentViewController:alert animated:YES completion:NULL];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    UIViewController *topVC = [self topViewController];
+
+    // ✅ 조건: 실제 present 가능한 상태인지 확인
+    BOOL canPresent =
+      topVC != nil &&
+      topVC.presentedViewController == nil &&
+      topVC.view.window != nil;
+
+    // ✅ 중복 호출 방지용 safe wrapper
+    __block BOOL called = NO;
+    void (^safeCall)(void) = ^{
+      if (!called) {
+        called = YES;
+        if (completionHandler) {
+          completionHandler();
+        }
+      }
+    };
+
+    // ✅ 예외 상황: alert을 띄울 수 없으면 그냥 completion 처리
+    if (!canPresent) {
+      NSLog(@"⚠️ [WebView] Cannot present alert. Skipping...");
+      safeCall();
+      return;
+    }
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"" message:message preferredStyle:UIAlertControllerStyleAlert];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+      NSLog(@"✅ [WebView] Alert dismissed, calling completionHandler");
+      safeCall();
+    }]];
+
+    @try {
+      NSLog(@"🟢 [WebView] Presenting alert");
+      [topVC presentViewController:alert animated:YES completion:nil];
+    }
+    @catch (NSException *exception) {
+      NSLog(@"❌ [WebView] Failed to present alert: %@", exception);
+      safeCall();
+    }
+  });
 #else
-  NSAlert *alert = [[NSAlert alloc] init];
-  [alert setMessageText:message];
-  [alert beginSheetModalForWindow:[NSApp keyWindow] completionHandler:^(__unused NSModalResponse response){
+  if (completionHandler) {
     completionHandler();
-  }];
-#endif // !TARGET_OS_OSX
+  }
+#endif
 }
 
 /**
